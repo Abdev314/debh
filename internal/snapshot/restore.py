@@ -121,7 +121,7 @@ def apply_changes(to_downgrade: List[str], to_remove: List[str], to_install: Lis
         return False
 
 
-def restore_snapshot(name: str, dry_run: bool = False) -> bool:
+def restore_snapshot(name: str, dry_run: bool = False, auto_yes: bool = False) -> bool:
     """
     Restore system to a previous snapshot.
 
@@ -152,6 +152,11 @@ def restore_snapshot(name: str, dry_run: bool = False) -> bool:
         confirm_action(to_downgrade, to_remove, to_install)
         return True
 
+    # Ask for confirmation (skip if auto_yes)
+    if not auto_yes and not confirm_action(to_downgrade, to_remove, to_install):
+        print("Restore cancelled.")
+        return False
+
     # Ask for confirmation
     if not confirm_action(to_downgrade, to_remove, to_install):
         print("Restore cancelled.")
@@ -174,7 +179,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python restore.py <snapshot-name> [--dry-run]")
+        print("Usage: python restore.py <snapshot-name> [--dry-run] [--yes]")
         print("\nAvailable snapshots:")
         from internal.snapshot.create import list_snapshots
 
@@ -184,5 +189,6 @@ if __name__ == "__main__":
 
     name = sys.argv[1]
     dry_run = "--dry-run" in sys.argv
+    auto_yes = "--yes" in sys.argv or "-y" in sys.argv
 
-    restore_snapshot(name, dry_run)
+    restore_snapshot(name, dry_run, auto_yes)
