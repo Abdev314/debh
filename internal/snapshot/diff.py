@@ -1,17 +1,14 @@
 """Compare two snapshots and show differences."""
 
 import json
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, Tuple
+from typing import Dict
 
-# Use same snapshot directory
-SNAPSHOT_DIR = Path("/var/lib/debh/snapshots")
+from internal.debian import config, versions
 
 
 def load_snapshot_data(name: str) -> dict:
     """Load snapshot JSON file."""
-    snapshot_path = SNAPSHOT_DIR / f"{name}.json"
+    snapshot_path = config.get_snapshot_path(name)
 
     if not snapshot_path.exists():
         raise FileNotFoundError(f"Snapshot '{name}' not found at {snapshot_path}")
@@ -53,9 +50,8 @@ def compare_snapshots(snap1_name: str, snap2_name: str) -> Dict:
             version1 = pkgs1[name]
             if version1 != version2:
                 version_changed.append((name, version1, version2))
-                # Try to determine if upgrade or downgrade
-                # Simple heuristic: compare version strings
-                if version2 > version1:
+                # Debian version semantics (epochs, revisions) via apt_pkg
+                if versions.compare_versions(version2, version1) > 0:
                     upgraded.append((name, version1, version2))
                 else:
                     downgraded.append((name, version1, version2))
