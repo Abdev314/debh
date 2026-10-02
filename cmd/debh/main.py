@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add project root to path (resolve() follows the /usr/local/bin/debh symlink)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from internal.snapshot import create, restore, diff
 
@@ -21,8 +21,8 @@ def check_sudo():
     """Warn if not running as root for commands that need it."""
     commands_needing_sudo = ['restore', 'snapshot']
     if sys.argv[1] in commands_needing_sudo and os.geteuid() != 0:
-        print("❌ This command requires root privileges.")
-        print("   Please run with: sudo debh " + " ".join(sys.argv[1:]))
+        print("This command requires root privileges.")
+        print("Please run with: sudo debh " + " ".join(sys.argv[1:]))
         sys.exit(1)
 
 
@@ -84,12 +84,12 @@ def main():
             # Store description in a sidecar file
             desc_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.desc"
             desc_path.write_text(f"{args.description}\n")
-        print(f"✅ Snapshot '{args.name}' created successfully")
+        print(f"Snapshot '{args.name}' created successfully")
 
     elif args.command == "list":
         snapshots = create.list_snapshots()
         if not snapshots:
-            print("📭 No snapshots found. Create one with: debh snapshot <name>")
+            print("No snapshots found. Create one with: debh snapshot <name>")
             return
 
         if args.verbose:
@@ -102,19 +102,19 @@ def main():
                     timestamp = datetime.fromisoformat(data["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
                     pkg_count = len(data["packages"])
                     print(f"   {snap_name}")
-                    print(f"      📅 {timestamp}")
-                    print(f"      📦 {pkg_count} packages")
+                    print(f"      {timestamp}")
+                    print(f"      {pkg_count} packages")
                     # Show description if exists
                     desc_path = Path(create.SNAPSHOT_DIR) / f"{snap_name}.desc"
                     if desc_path.exists():
-                        print(f"      📝 {desc_path.read_text().strip()}")
+                        print(f"{desc_path.read_text().strip()}")
                     print()
         else:
             print("\n📸 Snapshots:")
             for snap in snapshots:
-                print(f"   - {snap}")
-            print(f"\n   Total: {len(snapshots)} snapshots")
-            print("   Use 'debh list --verbose' for details")
+                print(f"- {snap}")
+            print(f"\n  Total: {len(snapshots)} snapshots")
+            print("Use 'debh list --verbose' for details")
 
     elif args.command == "restore":
         result = restore.restore_snapshot(args.name, dry_run=args.dry_run, auto_yes=args.yes)
@@ -127,19 +127,19 @@ def main():
     elif args.command == "show":
         snap_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.json"
         if not snap_path.exists():
-            print(f"❌ Snapshot '{args.name}' not found")
+            print(f"Snapshot '{args.name}' not found")
             sys.exit(1)
 
         with open(snap_path) as f:
             data = json.load(f)
 
-        print(f"\n📸 Snapshot: {args.name}")
-        print(f"   📅 Created: {data['timestamp']}")
-        print(f"   📦 Packages: {len(data['packages'])}")
+        print(f"\n Snapshot: {args.name}")
+        print(f"   Created: {data['timestamp']}")
+        print(f"   Packages: {len(data['packages'])}")
 
         desc_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.desc"
         if desc_path.exists():
-            print(f"   📝 Description: {desc_path.read_text().strip()}")
+            print(f"   Description: {desc_path.read_text().strip()}")
 
         # Show first 10 packages
         print(f"\n   First 10 packages:")
@@ -152,7 +152,7 @@ def main():
     elif args.command == "rm":
         snap_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.json"
         if not snap_path.exists():
-            print(f"❌ Snapshot '{args.name}' not found")
+            print(f"Snapshot '{args.name}' not found")
             sys.exit(1)
 
         if not args.force:
@@ -166,7 +166,7 @@ def main():
         desc_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.desc"
         if desc_path.exists():
             desc_path.unlink()
-        print(f"✅ Snapshot '{args.name}' deleted")
+        print(f"Snapshot '{args.name}' deleted")
 
     elif args.command == "info":
         print("""
