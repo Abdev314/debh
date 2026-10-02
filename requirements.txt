@@ -1,0 +1,3 @@
+# debh requires the Debian system package python3-apt (provides apt_pkg).
+# It is not pip-installable; install with: sudo apt install python3-apt
+# Tests additionally need pytest (pip install pytest).
