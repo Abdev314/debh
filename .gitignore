@@ -1,0 +1,18 @@
+# Virtual environment
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local snapshots (your test data)
+.debh/
+*.json
+
+# IDE
+.vscode/
+.idea/
+
+tree.txt
