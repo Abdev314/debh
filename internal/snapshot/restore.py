@@ -2,23 +2,16 @@
 
 import json
 import subprocess
-import sys
-from pathlib import Path
 from typing import List, Tuple
 
 from pkg.models.snapshot import Package
-from internal.debian import dpkg
-import os
-
-if os.environ.get('DEBH_DEV'):
-    SNAPSHOT_DIR = Path.home() / ".debh" / "snapshots"
-else:
-    SNAPSHOT_DIR = Path("/var/lib/debh/snapshots")
+from internal.debian import config, dpkg
+from internal.snapshot import verify
 
 
 def load_snapshot(name: str) -> dict:
     """Load a snapshot JSON file by name."""
-    snapshot_path = SNAPSHOT_DIR / f"{name}.json"
+    snapshot_path = config.get_snapshot_path(name)
 
     if not snapshot_path.exists():
         raise FileNotFoundError(f"Snapshot '{name}' not found at {snapshot_path}")
@@ -61,36 +54,48 @@ def calculate_diff(target_snapshot: dict) -> Tuple[List[str], List[str], List[st
     return to_downgrade, to_remove, to_install
 
 
-def confirm_action(to_downgrade: List[str], to_remove: List[str], to_install: List[str]) -> bool:
-    """Show changes and ask for user confirmation."""
+def show_changes(to_downgrade: List[str], to_remove: List[str], to_install: List[str]) -> None:
+    """Print the changes that a restore would apply."""
     if not any([to_downgrade, to_remove, to_install]):
         print("System already matches snapshot. Nothing to do.")
-        return False
+        return
 
     print("\nChanges to apply:")
 
     if to_install:
-        print(f"\n  📦 Install ({len(to_install)}):")
+        print(f"\n  Install ({len(to_install)}):")
         for pkg in to_install[:5]:
             print(f"     + {pkg}")
         if len(to_install) > 5:
             print(f"     ... and {len(to_install) - 5} more")
 
     if to_downgrade:
-        print(f"\n  ⬇ Downgrade ({len(to_downgrade)}):")
+        print(f"\n  Downgrade ({len(to_downgrade)}):")
         for pkg in to_downgrade[:5]:
-            print(f"     ↓ {pkg}")
+            print(f"     - {pkg}")
         if len(to_downgrade) > 5:
             print(f"     ... and {len(to_downgrade) - 5} more")
 
     if to_remove:
-        print(f"\n  ❌ Remove ({len(to_remove)}):")
+        print(f"\n  Remove ({len(to_remove)}):")
         for pkg in to_remove[:5]:
             print(f"     - {pkg}")
         if len(to_remove) > 5:
             print(f"     ... and {len(to_remove) - 5} more")
 
-    print("\n⚠️  This will change your system. Continue? [y/N]: ", end="")
+
+def confirm_action(to_downgrade: List[str], to_remove: List[str], to_install: List[str]) -> bool:
+    """
+    Single source of truth for the interactive restore confirmation.
+
+    Shows the pending changes and prompts exactly once. Returns True if
+    the user confirms, False if they decline or there is nothing to do.
+    """
+    show_changes(to_downgrade, to_remove, to_install)
+    if not any([to_downgrade, to_remove, to_install]):
+        return False
+
+    print("\nWARNING: This will change your system. Continue? [y/N]: ", end="")
     response = input().strip().lower()
     return response == 'y'
 
@@ -100,13 +105,13 @@ def apply_changes(to_downgrade: List[str], to_remove: List[str], to_install: Lis
     try:
         # Remove packages first (order matters)
         if to_remove:
-            print("\n🗑️  Removing packages...")
+            print("\nRemoving packages...")
             cmd = ["sudo", "apt", "remove", "--purge", "-y"] + to_remove
             subprocess.run(cmd, check=True)
 
         # Install/downgrade packages
         if to_install or to_downgrade:
-            print("\n📥 Installing/downgrading packages...")
+            print("\nInstalling/downgrading packages...")
             cmd = ["sudo", "apt", "install", "--allow-downgrades", "-y"]
             cmd.extend(to_install)
             cmd.extend(to_downgrade)
@@ -115,7 +120,7 @@ def apply_changes(to_downgrade: List[str], to_remove: List[str], to_install: Lis
         return True
 
     except subprocess.CalledProcessError as e:
-        print(f"\n❌ Error applying changes: {e}")
+        print(f"\nError applying changes: {e}")
         print("Your system may be in an inconsistent state.")
         print("Run 'sudo apt --fix-broken install' to recover.")
         return False
@@ -128,37 +133,47 @@ def restore_snapshot(name: str, dry_run: bool = False, auto_yes: bool = False) -
     Args:
         name: Snapshot name to restore
         dry_run: If True, only show what would change
+        auto_yes: If True, skip the interactive confirmation prompt
+                  (integrity verification still runs)
 
     Returns:
         True if successful, False otherwise
     """
-    print(f"🔄 Restoring to snapshot '{name}'...")
+    print(f"Restoring to snapshot '{name}'...")
 
     # Load the snapshot
     try:
         snapshot_data = load_snapshot(name)
-        print(f"   Snapshot from: {snapshot_data['timestamp']}")
-        print(f"   Target packages: {len(snapshot_data['packages'])}")
     except FileNotFoundError as e:
-        print(f"❌ {e}")
+        print(f"Error: {e}")
         return False
+    except json.JSONDecodeError as e:
+        print(f"Invalid snapshot JSON for '{name}': {e}")
+        return False
+
+    # Verify integrity BEFORE anything can touch the system. A corrupted
+    # or unverifiable snapshot must never reach confirmation or apt.
+    try:
+        verify.verify_snapshot(snapshot_data)
+    except verify.SnapshotVerificationError as e:
+        print(f"Snapshot '{name}' failed integrity verification: {e}")
+        return False
+
+    print(f"   Snapshot from: {snapshot_data['timestamp']}")
+    print(f"   Target packages: {len(snapshot_data['packages'])}")
 
     # Calculate what needs to change
     to_downgrade, to_remove, to_install = calculate_diff(snapshot_data)
 
-    # Dry run mode
+    # Dry run mode: show the changes, never prompt, never touch the system
     if dry_run:
         print("\n DRY RUN - No changes will be made")
-        confirm_action(to_downgrade, to_remove, to_install)
+        show_changes(to_downgrade, to_remove, to_install)
         return True
 
-    # Ask for confirmation (skip if auto_yes)
+    # Single confirmation gate. --yes skips ONLY this prompt; all
+    # validation and integrity checks above already ran.
     if not auto_yes and not confirm_action(to_downgrade, to_remove, to_install):
-        print("Restore cancelled.")
-        return False
-
-    # Ask for confirmation
-    if not confirm_action(to_downgrade, to_remove, to_install):
         print("Restore cancelled.")
         return False
 
@@ -169,7 +184,7 @@ def restore_snapshot(name: str, dry_run: bool = False, auto_yes: bool = False) -
         print("\n Restore complete! System should now match snapshot.")
         print("   You may need to restart some services or reboot.")
     else:
-        print("\n❌ Restore failed. Check errors above.")
+        print("\nRestore failed. Check errors above.")
 
     return success
 
