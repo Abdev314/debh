@@ -8,21 +8,36 @@ import sys
 import os
 import argparse
 import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 # Add project root to path (resolve() follows the /usr/local/bin/debh symlink)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from internal.debian import config
 from internal.snapshot import create, restore, diff
 
 
-def check_sudo():
-    """Warn if not running as root for commands that need it."""
-    commands_needing_sudo = ['restore', 'snapshot']
-    if sys.argv[1] in commands_needing_sudo and os.geteuid() != 0:
-        print("This command requires root privileges.")
-        print("Please run with: sudo debh " + " ".join(sys.argv[1:]))
+def check_sudo(args) -> None:
+    """
+    Abort with a clear message if the command requires root privileges.
+
+    Single sudo gate for the whole CLI: any command that performs
+    privileged filesystem or apt operations is checked here, before any
+    work starts, so failures surface as a readable error instead of a
+    cryptic permission traceback later.
+    """
+    if os.geteuid() == 0:
+        return
+
+    if args.command == "restore" and not args.dry_run:
+        print("'debh restore' requires root privileges (it modifies packages via apt).")
+        print(f"   Please run with: sudo debh restore {args.name}")
+        sys.exit(1)
+
+    if args.command in ("snapshot", "rm") and not config.is_dev_mode():
+        print(f"'debh {args.command}' requires root privileges to write to {config.get_snapshot_dir()}.")
+        print(f"   Please run with: sudo debh {args.command} {args.name}")
         sys.exit(1)
 
 
@@ -76,13 +91,17 @@ def main():
 
     args = parser.parse_args()
 
+    # Root-privilege gate: abort early with a clear message when the
+    # command needs privileges the current user does not have.
+    check_sudo(args)
+
     # Execute commands
     if args.command == "snapshot":
         print(f"📸 Creating snapshot '{args.name}'...")
         snap = create.create_snapshot(args.name)
         if args.description:
             # Store description in a sidecar file
-            desc_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.desc"
+            desc_path = config.get_snapshot_dir() / f"{args.name}.desc"
             desc_path.write_text(f"{args.description}\n")
         print(f"Snapshot '{args.name}' created successfully")
 
@@ -95,7 +114,7 @@ def main():
         if args.verbose:
             print(f"\n📸 Snapshots ({len(snapshots)} total):\n")
             for snap_name in snapshots:
-                snap_path = Path(create.SNAPSHOT_DIR) / f"{snap_name}.json"
+                snap_path = config.get_snapshot_path(snap_name)
                 if snap_path.exists():
                     with open(snap_path) as f:
                         data = json.load(f)
@@ -105,7 +124,7 @@ def main():
                     print(f"      {timestamp}")
                     print(f"      {pkg_count} packages")
                     # Show description if exists
-                    desc_path = Path(create.SNAPSHOT_DIR) / f"{snap_name}.desc"
+                    desc_path = config.get_snapshot_dir() / f"{snap_name}.desc"
                     if desc_path.exists():
                         print(f"{desc_path.read_text().strip()}")
                     print()
@@ -125,7 +144,7 @@ def main():
         diff.diff_snapshots(args.snapshot1, args.snapshot2, verbose=args.verbose)
 
     elif args.command == "show":
-        snap_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.json"
+        snap_path = config.get_snapshot_path(args.name)
         if not snap_path.exists():
             print(f"Snapshot '{args.name}' not found")
             sys.exit(1)
@@ -137,7 +156,7 @@ def main():
         print(f"   Created: {data['timestamp']}")
         print(f"   Packages: {len(data['packages'])}")
 
-        desc_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.desc"
+        desc_path = config.get_snapshot_dir() / f"{args.name}.desc"
         if desc_path.exists():
             print(f"   Description: {desc_path.read_text().strip()}")
 
@@ -150,7 +169,7 @@ def main():
         print()
 
     elif args.command == "rm":
-        snap_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.json"
+        snap_path = config.get_snapshot_path(args.name)
         if not snap_path.exists():
             print(f"Snapshot '{args.name}' not found")
             sys.exit(1)
@@ -163,13 +182,13 @@ def main():
 
         snap_path.unlink()
         # Also remove description if exists
-        desc_path = Path(create.SNAPSHOT_DIR) / f"{args.name}.desc"
+        desc_path = config.get_snapshot_dir() / f"{args.name}.desc"
         if desc_path.exists():
             desc_path.unlink()
         print(f"Snapshot '{args.name}' deleted")
 
     elif args.command == "info":
-        print("""
+        print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║  debh - Debian Package Snapshot Manager                  ║
 ║  Version: 0.1.0                                          ║
@@ -190,7 +209,7 @@ def main():
 ║    debh diff clean broken                                ║
 ║    debh restore before-upgrade --dry-run                 ║
 ║                                                          ║
-║  Snapshots stored in: /var/lib/debh/snapshots/           ║
+║  Snapshots stored in: {str(config.get_snapshot_dir()):<37}║
 ╚══════════════════════════════════════════════════════════╝
         """)
 
